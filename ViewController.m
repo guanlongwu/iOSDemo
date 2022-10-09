@@ -36,6 +36,7 @@
 #import "MultiThreadAction.h"
 #import "KSCrashAction.h"
 #import "HookObjcMsgSendAction.h"
+#import "MethodTimeCostAction.h"
 
 // interview题：https://xie.infoq.cn/article/b7524e3595b98a60d733d2cef
 
@@ -198,6 +199,12 @@ typedef void(^GLActionBlock)(void);
             
             [GLActionModel modelWithTitle:@"HookObjcMsgSend" block:^{
                 HookObjcMsgSendAction *action = [HookObjcMsgSendAction new];
+                [action doWork];
+                self.action = action;
+            }],
+            
+            [GLActionModel modelWithTitle:@"MethodTimeCost" block:^{
+                MethodTimeCostAction *action = [MethodTimeCostAction new];
                 [action doWork];
                 self.action = action;
             }],

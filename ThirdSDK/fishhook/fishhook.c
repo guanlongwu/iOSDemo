@@ -27,6 +27,11 @@
 #import <stdlib.h>
 #import <string.h>
 #import <sys/types.h>
+
+#include <mach/mach.h>
+#include <mach/vm_map.h>
+#include <mach/vm_region.h>
+
 #import <mach-o/dyld.h>
 #import <mach-o/loader.h>
 #import <mach-o/nlist.h>
@@ -47,6 +52,36 @@ typedef struct nlist nlist_t;
 
 #ifndef SEG_DATA_CONST
 #define SEG_DATA_CONST  "__DATA_CONST"
+#endif
+
+#if 0
+static int get_protection(void *addr, vm_prot_t *prot, vm_prot_t *max_prot) {
+  mach_port_t task = mach_task_self();
+  vm_size_t size = 0;
+  vm_address_t address = (vm_address_t)addr;
+  memory_object_name_t object;
+#ifdef __LP64__
+  mach_msg_type_number_t count = VM_REGION_BASIC_INFO_COUNT_64;
+  vm_region_basic_info_data_64_t info;
+  kern_return_t info_ret = vm_region_64(
+      task, &address, &size, VM_REGION_BASIC_INFO_64, (vm_region_info_64_t)&info, &count, &object);
+#else
+  mach_msg_type_number_t count = VM_REGION_BASIC_INFO_COUNT;
+  vm_region_basic_info_data_t info;
+  kern_return_t info_ret = vm_region(task, &address, &size, VM_REGION_BASIC_INFO, (vm_region_info_t)&info, &count, &object);
+#endif
+  if (info_ret == KERN_SUCCESS) {
+    if (prot != NULL)
+      *prot = info.protection;
+
+    if (max_prot != NULL)
+      *max_prot = info.max_protection;
+
+    return 0;
+  }
+
+  return -1;
+}
 #endif
 
 struct rebindings_entry {
@@ -164,7 +199,26 @@ static void perform_rebinding_with_section(struct rebindings_entry *rebindings,
           }
             
             // 将替换后的方法，给原来的方法，也就是替换内容为 自定义函数的地址
-          indirect_symbol_bindings[i] = cur->rebindings[j].replacement;
+            kern_return_t err;
+            
+            /**
+             * 1. Moved the vm protection modifying codes to here to reduce the
+             *    changing scope.
+             * 2. Adding VM_PROT_WRITE mode unconditionally because vm_region
+             *    API on some iOS/Mac reports mismatch vm protection attributes.
+             * -- Lianfu Hao Jun 16th, 2021
+             **/
+            err = vm_protect (mach_task_self (), (uintptr_t)indirect_symbol_bindings, section->size, 0, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
+            if (err == KERN_SUCCESS) {
+              /**
+               * Once we failed to change the vm protection, we
+               * MUST NOT continue the following write actions!
+               * iOS 15 has corrected the const segments prot.
+               * -- Lionfore Hao Jun 11th, 2021
+               **/
+              indirect_symbol_bindings[i] = cur->rebindings[j].replacement;
+            }
+            
           goto symbol_loop;
         }
       }
@@ -321,7 +375,7 @@ static void rebind_symbols_for_image(struct rebindings_entry *rebindings,
     }
   }
 
-    // 刚才获取的，主要有一项为空，则直接返回
+    // 刚才获取的，只要有一项为空，则直接返回
   if (!symtab_cmd || !dysymtab_cmd || !linkedit_segment ||
       !dysymtab_cmd->nindirectsyms) {
     return;
